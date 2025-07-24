@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Java Chess Bot</title>
+    <style>
+        :root {
+            --board-bg-light: #f0d9b5;
+            --board-bg-dark: #b58863;
+            --selected-bg: #6a9c5a;
+            --main-bg: #312e2b;
+            --text-light: #e8e6e3;
+            --border-color: #4a4a4a;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            flex-direction: column;
+            min-height: 100vh;
+            margin: 0;
+            background-color: var(--main-bg);
+            color: var(--text-light);
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        h1 {
+            margin: 0;
+            font-weight: 600;
+        }
+
+        #chessboard {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            width: 90vw;
+            max-width: 640px;
+            border: 5px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.4);
+            /* aspect-ratio property removed for better compatibility */
+        }
+
+        .square {
+            position: relative; /* Required for the piece's absolute positioning */
+            width: 100%;
+            /* The padding-bottom trick forces the element's height to match its width, creating a perfect square */
+            padding-bottom: 100%;
+        }
+
+        .light { background-color: var(--board-bg-light); }
+        .dark { background-color: var(--board-bg-dark); }
+
+        .piece {
+            cursor: pointer;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.3);
+            user-select: none;
+
+            /* These styles perfectly center the piece inside the new square structure */
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: clamp(20px, 9.5vmin, 60px);
+        }
+
+        .selected::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: var(--selected-bg);
+            opacity: 0.7;
+        }
+
+        #status {
+            font-size: 1.2em;
+            font-weight: 500;
+            height: 1.5em;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <h1>Java Chess Bot</h1>
+    <div id="chessboard"></div>
+    <div id="status">White's Turn (Your Turn)</div>
+</div>
+
+<script>
+    const chessboard = document.getElementById('chessboard');
+    const statusDisplay = document.getElementById('status');
+    let selectedSquare = null;
+    let boardState = [];
+    let isPlayerTurn = true;
+
+    const pieces = {
+        'P': '♙', 'R': '♖', 'N': '♘', 'B': '♗', 'Q': '♕', 'K': '♔',
+        'p': '♟', 'r': '♜', 'n': '♞', 'b': '♝', 'q': '♛', 'k': '♚'
+    };
+
+    function drawBoard() {
+        chessboard.innerHTML = '';
+        for (let r = 0; r < 8; r++) {
+            for (let c = 0; c < 8; c++) {
+                const square = document.createElement('div');
+                square.classList.add('square', (r + c) % 2 === 0 ? 'light' : 'dark');
+                square.dataset.row = r;
+                square.dataset.col = c;
+
+                const pieceSymbol = boardState[r][c];
+                if (pieceSymbol) {
+                    const pieceElement = document.createElement('span');
+                    pieceElement.classList.add('piece');
+                    pieceElement.innerText = pieces[pieceSymbol];
+                    square.appendChild(pieceElement);
+                }
+
+                square.addEventListener('click', onSquareClick);
+                chessboard.appendChild(square);
+            }
+        }
+    }
+
+    function onSquareClick(event) {
+        if (!isPlayerTurn) return;
+
+        const square = event.currentTarget;
+        const row = parseInt(square.dataset.row);
+        const col = parseInt(square.dataset.col);
+
+        if (selectedSquare) {
+            const fromAlg = toAlgebraic(selectedSquare.row, selectedSquare.col);
+            const toAlg = toAlgebraic(row, col);
+
+            if (fromAlg !== toAlg) {
+                makePlayerMove(fromAlg, toAlg);
+            }
+            clearHighlights();
+            selectedSquare = null;
+        } else {
+            const piece = boardState[row][col];
+            if (piece && isWhitePiece(piece)) {
+                selectedSquare = { row, col, piece };
+                square.classList.add('selected');
+            }
+        }
+    }
+
+    function clearHighlights() {
+        document.querySelectorAll('.square.selected').forEach(s => s.classList.remove('selected'));
+    }
+
+    async function getNewGame() {
+        statusDisplay.textContent = "Loading new game...";
+        isPlayerTurn = false;
+        try {
+            const response = await fetch('http://localhost:8080/new-game');
+            if (!response.ok) throw new Error('Network response was not ok');
+            boardState = await response.json();
+            drawBoard();
+            statusDisplay.textContent = "White's Turn (Your Turn)";
+        } catch (error) {
+            console.error("Failed to start new game:", error);
+            statusDisplay.textContent = "Error: Could not connect to the server.";
+            setupDefaultBoard();
+            drawBoard();
+        } finally {
+            isPlayerTurn = true;
+        }
+    }
+
+    async function makePlayerMove(from, to) {
+        statusDisplay.textContent = "AI is thinking...";
+        isPlayerTurn = false;
+        try {
+            const response = await fetch(`http://localhost:8080/move?from=${from}&to=${to}`);
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({error: 'Invalid move'}));
+                throw new Error(errorData.error);
+            }
+            boardState = await response.json();
+            drawBoard();
+
+            const gameOver = response.headers.get("X-Game-Over");
+            if (gameOver) {
+                statusDisplay.textContent = gameOver;
+                isPlayerTurn = false;
+            } else {
+                statusDisplay.textContent = "White's Turn (Your Turn)";
+                isPlayerTurn = true;
+            }
+        } catch (error) {
+            console.error("Failed to make move:", error);
+            statusDisplay.textContent = "Invalid move! Try again.";
+            await getBoardState();
+            isPlayerTurn = true;
+        }
+    }
+
+    async function getBoardState() {
+        try {
+            const response = await fetch('http://localhost:8080/get-board');
+            boardState = await response.json();
+            drawBoard();
+        } catch(e) {
+            console.error("Failed to get board state", e);
+        }
+    }
+
+    function toAlgebraic(row, col) {
+        const file = String.fromCharCode('a'.charCodeAt(0) + col);
+        const rank = 8 - row;
+        return file + rank;
+    }
+
+    function isWhitePiece(piece) {
+        return piece && piece === piece.toUpperCase();
+    }
+
+    function setupDefaultBoard() {
+         boardState = [
+            ['r', 'n', 'b', 'q', 'k', 'b', 'n', 'r'],
+            ['p', 'p', 'p', 'p', 'p', 'p', 'p', 'p'],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            [null, null, null, null, null, null, null, null],
+            ['P', 'P', 'P', 'P', 'P', 'P', 'P', 'P'],
+            ['R', 'N', 'B', 'Q', 'K', 'B', 'N', 'R']
+        ];
+    }
+
+    getNewGame();
+</script>
+</body>
+</html>
